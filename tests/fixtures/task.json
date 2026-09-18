@@ -1,0 +1,14 @@
+{
+  "id": "20260918T150233Z-a1b2",
+  "ts": 1789737753,
+  "kind": "agent",
+  "text": "чекни новые сообщения в bitrix24",
+  "worker": "any",
+  "context": [
+    {"role": "user", "content": "привет"},
+    {"role": "assistant", "content": "привет! чем занят?"}
+  ],
+  "attachments": [
+    {"path": "in/att/20260918T150233Z-a1b2/photo.jpg", "name": "photo.jpg", "mime": "image/jpeg"}
+  ]
+}

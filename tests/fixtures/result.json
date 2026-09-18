@@ -1,0 +1,11 @@
+{
+  "id": "20260918T150401Z-c3d4",
+  "ref": "20260918T150233Z-a1b2",
+  "ts": 1789737841,
+  "ok": true,
+  "worker": "laptop",
+  "text": "5 непрочитанных в 2 чатах задач, отчёт во вложении",
+  "attachments": [
+    {"path": "out/att/20260918T150401Z-c3d4/report.md", "name": "report.md", "mime": ""}
+  ]
+}
