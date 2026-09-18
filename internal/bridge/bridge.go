@@ -16,14 +16,16 @@ import (
 	"strings"
 	"time"
 
+	"yd-adapter/internal/chatllm"
 	"yd-adapter/ydisk"
 )
 
 // Puller связывает клиент Диска, корень канала (/echo) и каталог очереди.
 type Puller struct {
 	Client   *ydisk.YdClient
-	Root     string // корень канала на Диске, напр. "/echo"
-	QueueDir string // локальный каталог очереди
+	Root     string          // корень канала на Диске, напр. "/echo"
+	QueueDir string          // локальный каталог очереди
+	Chat     *chatllm.Client // nil — chat-конверты не поддерживаются
 }
 
 // конверт задачи/ответа на Диске (docs/PROTOCOL.md)
@@ -92,7 +94,7 @@ func (p *Puller) PullIn(st *State) (int, error) {
 		switch handled {
 		case handlingDeferred:
 			continue // вложения не доехали, конверт остался в in/ — не помечаем
-		case handlingQueued:
+		case handlingQueued, handlingReplied:
 			processed++
 		}
 		if err := st.Mark(id); err != nil {
@@ -108,6 +110,7 @@ type handling int
 const (
 	handlingDeferred handling = iota // вложения не скачались — повтор на следующем цикле
 	handlingQueued                   // задача положена в очередь
+	handlingReplied                  // chat-конверт отвечен через LLM
 	handlingBroken                   // битый JSON уехал в archive/broken
 )
 
@@ -121,6 +124,10 @@ func (p *Puller) processOne(name, id string) (handling, error) {
 	if err := json.Unmarshal(raw, &env); err != nil {
 		log.Printf("WARN: битый JSON %s — в archive/broken: %v", name, err)
 		return handlingBroken, p.Client.Move(p.in(name), p.archive("broken", name))
+	}
+
+	if env.Kind == "chat" {
+		return p.handleChat(name, id, env)
 	}
 
 	// вложения публикуются до конверта, но докачка может совпасть:
@@ -171,11 +178,83 @@ func (p *Puller) processOne(name, id string) (handling, error) {
 	if err := os.Rename(tmp, dst); err != nil {
 		return handlingDeferred, err
 	}
+	// задача уже в inbox: сбой перекладки в archive не должен приводить к повторной
+	// постановке — state пометит id, следующий цикл дозархивирует (ветка st.Has)
 	if err := p.Client.Move(p.in(name), p.archive("in", name)); err != nil && !isNameTaken(err) {
-		return handlingQueued, err
+		log.Printf("WARN: задача %s в inbox, но конверт не переложен в archive: %v", id, err)
 	}
 	log.Printf("pull_in: задача %s (worker=%s, вложений %d) → inbox", id, env.Worker, len(localAtts))
 	return handlingQueued, nil
+}
+
+// handleChat отвечает на конверт kind:chat через LLM, минуя очередь.
+func (p *Puller) handleChat(name, id string, env Envelope) (handling, error) {
+	// публикует отказ ok=false и архивирует исходник; сбой перекладки — не ошибка
+	refuse := func(reason string) (handling, error) {
+		envName, err := p.publishOutEnvelope(id, false, "llm", reason, nil)
+		if err != nil {
+			return handlingDeferred, err
+		}
+		if err := p.Client.Move(p.in(name), p.archive("in", name)); err != nil && !isNameTaken(err) {
+			log.Printf("WARN: chat %s отвечен (%s), но конверт не переложен: %v", id, envName, err)
+		}
+		log.Printf("chat %s: отказ (%s), конверт %s", id, reason, envName)
+		return handlingReplied, nil
+	}
+
+	if p.Chat == nil {
+		return refuse("LLM на сервере не настроен")
+	}
+	if len(env.Attachments) > 0 {
+		return refuse("вложения в чате пока не поддерживаются")
+	}
+	history := make([]chatllm.Msg, 0, len(env.Context))
+	for _, c := range env.Context {
+		history = append(history, chatllm.Msg{Role: c.Role, Content: c.Content})
+	}
+	answer, err := p.Chat.Answer(history, env.Text)
+	if err != nil {
+		return refuse("LLM недоступна: " + err.Error())
+	}
+	envName, err := p.publishOutEnvelope(id, true, "llm", answer, nil)
+	if err != nil {
+		return handlingDeferred, err
+	}
+	if err := p.Client.Move(p.in(name), p.archive("in", name)); err != nil && !isNameTaken(err) {
+		log.Printf("WARN: chat %s отвечен (%s), но конверт не переложен: %v", id, envName, err)
+	}
+	log.Printf("chat %s: ответ LLM опубликован (%s)", id, envName)
+	return handlingReplied, nil
+}
+
+// publishOutEnvelope публикует конверт ответа out/<ts>-<hash>.json (последним,
+// правило 2). При 409 — новое имя. Возвращает имя опубликованного конверта.
+func (p *Puller) publishOutEnvelope(refID string, ok bool, worker, text string, atts []Att) (string, error) {
+	now := time.Now().Unix()
+	for attempt := 0; ; attempt++ {
+		envName := ydisk.MakeName(now, randomSalt())
+		env := map[string]any{
+			"id":          envName,
+			"ref":         refID,
+			"ts":          now,
+			"ok":          ok,
+			"worker":      worker,
+			"text":        text,
+			"attachments": atts,
+		}
+		body, err := json.Marshal(env)
+		if err != nil {
+			return "", err
+		}
+		err = p.Client.Upload(p.Root+"/out/"+envName+".json", body)
+		if err == nil {
+			return envName, nil
+		}
+		if isNameTaken(err) && attempt < 5 {
+			continue
+		}
+		return "", err
+	}
 }
 
 func (p *Puller) download(name string) ([]byte, error) {
@@ -284,31 +363,9 @@ func (p *Puller) publishOne(outbox, name string) (bool, error) {
 		})
 	}
 
-	// 2. конверт ответа (последним); имя уникально, при 409 — новое
-	now := time.Now().Unix()
-	var envName string
-	for attempt := 0; ; attempt++ {
-		envName = ydisk.MakeName(now, randomSalt())
-		env := map[string]any{
-			"id":          envName,
-			"ref":         id,
-			"ts":          now,
-			"ok":          res.OK,
-			"worker":      res.Worker,
-			"text":        res.Text,
-			"attachments": diskAtts,
-		}
-		body, err := json.Marshal(env)
-		if err != nil {
-			return false, err
-		}
-		err = p.Client.Upload(p.Root+"/out/"+envName+".json", body)
-		if err == nil {
-			break
-		}
-		if isNameTaken(err) && attempt < 5 {
-			continue
-		}
+	// 2. конверт ответа (последним)
+	envName, err := p.publishOutEnvelope(id, res.OK, res.Worker, res.Text, diskAtts)
+	if err != nil {
 		return false, err
 	}
 
