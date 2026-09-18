@@ -52,6 +52,7 @@ func (f *Fake) Put(path string, data []byte) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.files[path] = data
+	f.addParentsLocked(path) // как при загрузке через API
 }
 
 // Files — снимок хранилища.
