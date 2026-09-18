@@ -23,6 +23,7 @@ type Fake struct {
 	mu    sync.Mutex
 	files map[string][]byte
 	dirs  map[string]bool
+	jrnl  []string // журнал загрузок "put <path>" — проверка порядка в тестах
 }
 
 func New() *Fake {
@@ -216,11 +217,19 @@ func (f *Fake) handlePut(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	f.files[path] = body
+	f.jrnl = append(f.jrnl, "put "+path)
 	// родители считаем существующими каталогами
 	for cur := parentOf(path); cur != "/"; cur = parentOf(cur) {
 		f.dirs[cur] = true
 	}
 	w.WriteHeader(http.StatusCreated)
+}
+
+// Journal — снимок журнала операций загрузки.
+func (f *Fake) Journal() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.jrnl...)
 }
 
 func (f *Fake) handleDownloadHref(w http.ResponseWriter, r *http.Request) {

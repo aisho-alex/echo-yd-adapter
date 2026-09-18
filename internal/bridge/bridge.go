@@ -5,6 +5,8 @@ package bridge
 
 import (
 	"bytes"
+	crand "crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -12,6 +14,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"yd-adapter/ydisk"
 )
@@ -190,3 +193,137 @@ func (p *Puller) archive(d, name string) string {
 }
 
 func isNameTaken(err error) bool { return err == ydisk.ErrNameTaken }
+
+// ---------- публикация результатов: outbox → out ----------
+
+// OutResult — схема результата в outbox/<id>.json (пишет воркер, менять нельзя).
+type OutResult struct {
+	ID          string `json:"id"`
+	ChatID      int64  `json:"chat_id"`
+	OK          bool   `json:"ok"`
+	Worker      string `json:"worker"`
+	Text        string `json:"text"`
+	Attachments []Att  `json:"attachments"`
+}
+
+// PushOut публикует результаты из очереди на Диск: вложения (out/att/<id>/…)
+// строго раньше конверта out/<ts>-<hash>.json (правило 2 протокола),
+// затем outbox-файл уезжает в done/. Результат с недостающим вложением
+// остаётся в outbox (не теряем). Возвращает число публикаций.
+func (p *Puller) PushOut() (int, error) {
+	outbox := filepath.Join(p.QueueDir, "outbox")
+	entries, err := os.ReadDir(outbox)
+	if os.IsNotExist(err) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	// done/ нужен для перевода опубликованных результатов (адаптер сам себе дворник)
+	if err := os.MkdirAll(filepath.Join(p.QueueDir, "done"), 0o755); err != nil {
+		return 0, err
+	}
+	published := 0
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+			continue
+		}
+		ok, err := p.publishOne(outbox, e.Name())
+		if err != nil {
+			return published, err
+		}
+		if ok {
+			published++
+		}
+	}
+	return published, nil
+}
+
+func (p *Puller) publishOne(outbox, name string) (bool, error) {
+	src := filepath.Join(outbox, name)
+	raw, err := os.ReadFile(src)
+	if err != nil {
+		return false, err
+	}
+	var res OutResult
+	if err := json.Unmarshal(raw, &res); err != nil {
+		log.Printf("WARN: битый результат outbox/%s — оставляю на месте: %v", name, err)
+		return false, nil
+	}
+	id := strings.TrimSuffix(name, ".json")
+
+	// все вложения должны быть на месте ДО публикации
+	var local []struct{ path, name, mime string }
+	for _, att := range res.Attachments {
+		attPath := filepath.Join(p.QueueDir, filepath.FromSlash(att.Path))
+		if _, err := os.Stat(attPath); err != nil {
+			log.Printf("WARN: вложение %s результата %s не найдено — публикация отложена", att.Path, id)
+			return false, nil
+		}
+		local = append(local, struct{ path, name, mime string }{attPath, att.Name, att.Mime})
+	}
+
+	// 1. вложения
+	diskAtts := make([]Att, 0, len(local))
+	for _, a := range local {
+		data, err := os.ReadFile(a.path)
+		if err != nil {
+			return false, err
+		}
+		dst := p.Root + "/out/att/" + id + "/" + a.name
+		if err := p.Client.EnsureDir(p.Root + "/out/att/" + id); err != nil {
+			return false, err
+		}
+		if err := p.Client.Upload(dst, data); err != nil {
+			return false, fmt.Errorf("вложение %s: %w", dst, err)
+		}
+		diskAtts = append(diskAtts, Att{
+			Path: "out/att/" + id + "/" + a.name,
+			Name: a.name,
+			Mime: a.mime,
+		})
+	}
+
+	// 2. конверт ответа (последним); имя уникально, при 409 — новое
+	now := time.Now().Unix()
+	var envName string
+	for attempt := 0; ; attempt++ {
+		envName = ydisk.MakeName(now, randomSalt())
+		env := map[string]any{
+			"id":          envName,
+			"ref":         id,
+			"ts":          now,
+			"ok":          res.OK,
+			"worker":      res.Worker,
+			"text":        res.Text,
+			"attachments": diskAtts,
+		}
+		body, err := json.Marshal(env)
+		if err != nil {
+			return false, err
+		}
+		err = p.Client.Upload(p.Root+"/out/"+envName+".json", body)
+		if err == nil {
+			break
+		}
+		if isNameTaken(err) && attempt < 5 {
+			continue
+		}
+		return false, err
+	}
+
+	// 3. исходник → done/
+	if err := os.Rename(src, filepath.Join(p.QueueDir, "done", name)); err != nil {
+		return false, err
+	}
+	log.Printf("push_out: результат %s опубликован (%s), вложений %d", id, envName, len(diskAtts))
+	return true, nil
+}
+
+func randomSalt() string {
+	b := make([]byte, 2)
+	if _, err := crand.Read(b); err != nil {
+		panic(err) // источник энтропии отсутствует — системе не место в строю
+	}
+	return hex.EncodeToString(b)
+}
