@@ -1,0 +1,10 @@
+# бинарник
+/yd-adapter
+yd-adapter.exe
+
+# секреты: токен и LLM-ключ
+.env
+
+# тестовый мусор
+*.test
+coverage.out
