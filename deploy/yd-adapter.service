@@ -1,0 +1,22 @@
+[Unit]
+Description=yd-adapter — файловый транспорт Яндекс.Диск ⇄ очередь echo-bot
+Documentation=https://github.com/aisho-alex/yd-adapter
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/opt/echo-bot/yd-adapter
+EnvironmentFile=/opt/echo-bot/yd-adapter/.env
+ExecStart=/opt/echo-bot/yd-adapter/yd-adapter --env /opt/echo-bot/yd-adapter/.env
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+# yd-adapter и echo-bot не должны работать одновременно: оба пишут в QUEUE_DIR.
+# Дисциплина — процедура отката в README; --check предупреждает, если echo-bot активен.
+
+[Install]
+WantedBy=multi-user.target
