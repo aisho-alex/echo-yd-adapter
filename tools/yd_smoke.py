@@ -78,7 +78,10 @@ def main() -> int:
             st, _ = req(token, "GET", f"{API}/resources?path=%2Fecho&limit=1")
             if st == 429:
                 n429 += 1
-                print(f"{i + 1}: 429!")
+                print(f"{i + 1}: 429!", file=sys.stderr)
+            if (i + 1) % 25 == 0:
+                print(f"  {i + 1}/{args.rate}, {time.time() - t0:.0f} c",
+                      file=sys.stderr)
             time.sleep(0.1)
         print(f"rate: {args.rate} запросов, 429: {n429}, "
               f"{time.time() - t0:.1f} c")
@@ -110,11 +113,11 @@ def main() -> int:
     st, data = download(token, f"{SMOKE_DIR}/hello.txt")
     match = (data == HELLO.encode())
 
-    # 6. удалить папку целиком
+    # 6. удалить папку целиком (202 — принято; удаление папки идёт в фоне)
     st, _ = req(token, "DELETE", f"{API}/resources?path={urllib.parse.quote(SMOKE_DIR)}&permanently=true")
     dele = st
 
-    ok = up_code in (201, 200) and lst == 1 and match and dele == 204
+    ok = up_code in (201, 200) and lst == 1 and match and dele in (202, 204)
     print(f"{'ok' if ok else 'FAIL'}: list={lst} upload={up_code} "
           f"duplicate={st2} download={'match' if match else 'MISMATCH'} delete={dele}")
     return 0 if ok else 1
