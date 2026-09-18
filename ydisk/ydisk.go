@@ -146,6 +146,16 @@ func isTaken(err error) bool {
 
 // ---------- операции протокола ----------
 
+// Check — проверка токена: GET /v1/disk. 200 = токен живой и права на месте.
+func (c *YdClient) Check() error {
+	resp, err := c.doAPI(http.MethodGet, "", nil)
+	if err != nil {
+		return err
+	}
+	resp.Body.Close()
+	return nil
+}
+
 // List отдаёт содержимое каталога (с пагинацией).
 func (c *YdClient) List(path string) ([]Resource, error) {
 	var all []Resource

@@ -47,6 +47,13 @@ func (s *State) Load() error {
 	return nil
 }
 
+// Count — сколько id уже обработано.
+func (s *State) Count() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.seen)
+}
+
 func (s *State) Has(id string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
