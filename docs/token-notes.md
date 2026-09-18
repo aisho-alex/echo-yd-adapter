@@ -22,6 +22,21 @@
 3. Проверить (не вставляя токен в чат/git):
    `curl -s -H "Authorization: OAuth $TOKEN" "https://cloud-api.yandex.net/v1/disk/" | head -c 400`
    — ожидаем JSON с `total_space`, `used_space`, `user.login`, не 401.
+4. Зафиксировать фактический срок жизни access-токена (дату истечения из открывшейся страницы
+   согласия). Если он конечен и короток — перейти на explicit-flow (ниже).
+
+> **Не вариант:** «пароль приложения» (id.yandex.ru) — он аутентифицирует только WebDAV
+> (`webdav.yandex.net`). REST API (`cloud-api.yandex.net`) принимает исключительно OAuth
+> и отвечает 401 на Basic-аутентификацию. Решение зафиксировано 18.09.2026.
+
+## Explicit-flow (если implicit-токен оказался короткоживущим)
+
+Серверный токен: `GET https://oauth.yandex.ru/authorize?response_type=code&client_id=…` →
+обменять `code` на `https://oauth.yandex.ru/token` (POST: `grant_type=authorization_code`,
+`code`, `client_id`, `client_secret`) → в `.env` сервера лежат `YD_TOKEN` + `YD_REFRESH_TOKEN`
++ `YD_CLIENT_ID` + `YD_CLIENT_SECRET` (600); адаптер сам обновляет access-токен по
+`grant_type=refresh_token`. Телефонному токену explicit-flow не нужен — перевыдача вручную
+приемлема.
 
 ## Выданные токены
 
