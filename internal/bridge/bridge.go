@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"yd-adapter/internal/chatllm"
+	"yd-adapter/internal/notify"
 	"yd-adapter/ydisk"
 )
 
@@ -26,6 +27,7 @@ type Puller struct {
 	Root     string          // корень канала на Диске, напр. "/echo"
 	QueueDir string          // локальный каталог очереди
 	Chat     *chatllm.Client // nil — chat-конверты не поддерживаются
+	Ntfy     *notify.Client  // nil — push-уведомления выключены
 }
 
 // конверт задачи/ответа на Диске (docs/PROTOCOL.md)
@@ -260,6 +262,12 @@ func (p *Puller) publishOutEnvelope(refID string, ok bool, worker, text string, 
 		}
 		err = p.Client.Upload(p.Root+"/out/"+envName+".json", body)
 		if err == nil {
+			// push — best effort: конверт уже в out/, сбой уведомления не ошибка
+			if p.Ntfy != nil {
+				if nerr := p.Ntfy.Reply(refID); nerr != nil {
+					log.Printf("WARN: push не ушёл (%s): %v", refID, nerr)
+				}
+			}
 			return envName, nil
 		}
 		if isNameTaken(err) && attempt < 5 {

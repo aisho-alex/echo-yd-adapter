@@ -18,6 +18,7 @@ import (
 	"yd-adapter/internal/bridge"
 	"yd-adapter/internal/chatllm"
 	"yd-adapter/internal/config"
+	"yd-adapter/internal/notify"
 	"yd-adapter/internal/reclaim"
 	"yd-adapter/internal/retention"
 	"yd-adapter/ydisk"
@@ -55,6 +56,12 @@ func main() {
 		})
 	} else {
 		log.Printf("WARN: LLM_API_KEY не задан — chat-конверты будут получать отказ")
+	}
+	if cfg.NtfyTopic != "" {
+		p.Ntfy = notify.New(cfg.NtfyURL, cfg.NtfyTopic)
+		log.Printf("push: ntfy %s (топик задан)", cfg.NtfyURL)
+	} else {
+		log.Printf("push: выключен (NTFY_TOPIC не задан)")
 	}
 
 	if *dryRun {
@@ -176,6 +183,11 @@ func printState(p *bridge.Puller, st *bridge.State) {
 	}
 	log.Printf("Очередь %s: inbox=%s claimed=%s outbox=%s done=%s",
 		p.QueueDir, qcount("inbox"), qcount("claimed"), qcount("outbox"), qcount("done"))
+	if p.Ntfy != nil {
+		log.Printf("Push: ntfy %s (топик задан)", p.Ntfy.BaseURL)
+	} else {
+		log.Printf("Push: выключен")
+	}
 	log.Printf("Состояние: обработано id=%d, chat=%v", st.Count(), p.Chat != nil)
 }
 

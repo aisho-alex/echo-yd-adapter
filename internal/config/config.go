@@ -25,6 +25,9 @@ type Config struct {
 	LLMModel   string
 	LLMSystem  string
 	LLMTimeout time.Duration
+
+	NtfyURL   string
+	NtfyTopic string // пусто — push выключен
 }
 
 // Load читает envFile (если существует), затем значения из окружения,
@@ -47,6 +50,8 @@ func Load(envFile string) (Config, error) {
 		RetentionDays: 30,
 		ClaimTimeout:  1800 * time.Second,
 		LLMTimeout:    120 * time.Second,
+		NtfyURL:       orDefault(os.Getenv("NTFY_URL"), "https://ntfy.sh"),
+		NtfyTopic:     os.Getenv("NTFY_TOPIC"),
 	}
 	var err error
 	if v := os.Getenv("POLL_INTERVAL"); v != "" {

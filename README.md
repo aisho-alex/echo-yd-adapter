@@ -72,6 +72,7 @@ internal/bridge/       мосты Диск ⇄ очередь, state.json
 internal/reclaim/      возврат просроченных claim'ов в inbox/
 internal/retention/    чистка archive/ по RETENTION_DAYS
 internal/chatllm/      ответы на kind: chat через LLM
+internal/notify/       push о новых ответах через ntfy (best effort, без текста)
 docs/PROTOCOL.md       спецификация файлового канала (канон)
 docs/token-notes.md    процедура и учёт OAuth-токенов (без самих токенов)
 tests/fixtures/        фикстуры протокола
@@ -95,5 +96,14 @@ yd-adapter            # демон: POLL_INTERVAL=10 c
 ```
 
 Конфиг — `.env` рядом с бинарником (см. `.env.example`): `YD_TOKEN`, `YD_ROOT`,
-`QUEUE_DIR`, `POLL_INTERVAL`, `RETENTION_DAYS`, `CLAIM_TIMEOUT`, `STATE_FILE`, `LLM_*`.
+`QUEUE_DIR`, `POLL_INTERVAL`, `RETENTION_DAYS`, `CLAIM_TIMEOUT`, `STATE_FILE`, `LLM_*`,
+`NTFY_URL` (по умолчанию `https://ntfy.sh`), `NTFY_TOPIC` (пусто — push выключен).
+
+## Push о новых ответах (ntfy)
+
+После публикации конверта в `out/` адаптер шлёт уведомление в топик `NTFY_TOPIC` на
+ntfy.sh: заголовок, «Новый ответ» (без текста ответа — см. PROTOCOL.md §7) и deep link
+`echopult://open?ref=<id>`. На телефоне должно стоять приложение ntfy со подпиской на
+топик (мгновенная доставка через FCM). Push — best effort: сбой уведомления не влияет
+на цикл, телефон догонит опросом.
 
