@@ -8,8 +8,49 @@
 Результаты идут обратно: `queue/outbox` → `/echo/out/`. Конверты `kind: chat` адаптер
 отвечает сам через OpenAI-совместимый LLM, мимо очереди.
 
-**Статус:** реализация не начата. План (решения, фазы, риски) — в репе
-`LazDeltaChatBot`: `docs/plans/2026-09-18-yandex-disk-transport.md`.
+**Статус:** реализовано и задеплоено на `<сервер>` (2026-09-21). Сквозной путь
+проверен с реального телефона: задача агенту дошла до воркера и вернулась с вложениями,
+chat-конверт отвечен LLM. План (решения, фазы, риски) — в репе `LazDeltaChatBot`:
+`docs/plans/2026-09-18-yandex-disk-transport.md`.
+
+## Деплой на сервере
+
+```
+/opt/echo-bot/yd-adapter/yd-adapter      статический бинарник (amd64)
+/opt/echo-bot/yd-adapter/.env            YD_TOKEN, QUEUE_DIR, LLM_* (chmod 600)
+/etc/systemd/system/yd-adapter.service   юнит (User=ubuntu, Restart=always)
+```
+
+```
+# состояние и логи
+sudo systemctl status yd-adapter
+sudo journalctl -u yd-adapter -f
+
+# диагностика (токен, папки, очередь, взаимомыключение с echo-bot)
+/opt/echo-bot/yd-adapter/yd-adapter --check --env /opt/echo-bot/yd-adapter/.env
+/opt/echo-bot/yd-adapter/yd-adapter --dry-run    # показать состояние и выйти
+```
+
+Пересборка и заливка (SCP не используем — pipe):
+
+```
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /tmp/yd-adapter .
+cat /tmp/yd-adapter | ssh ubuntu@<сервер> \
+  'sudo systemctl stop yd-adapter && cat > /opt/echo-bot/yd-adapter/yd-adapter \
+   && chmod 755 /opt/echo-bot/yd-adapter/yd-adapter && sudo systemctl start yd-adapter'
+```
+
+Правило: **`yd-adapter` и `echo-bot` одновременно работать не должны** — оба пишут в
+`QUEUE_DIR` (задачи выполнятся дважды). `--check` предупреждает, если `echo-bot` активен.
+
+## Откат на почтовый канал
+
+```
+ssh ubuntu@<сервер> 'sudo systemctl stop yd-adapter && sudo systemctl start echo-bot'
+ssh ubuntu@<сервер> 'sudo systemctl stop echo-bot && sudo systemctl start yd-adapter'
+```
+
+Бэкап перед первым деплоем: `/opt/echo-bot/backup-pre-yd-adapter-*.tar.gz` (`.env` + очередь).
 
 ## Раскладка на Диске
 
@@ -56,11 +97,3 @@ yd-adapter            # демон: POLL_INTERVAL=10 c
 Конфиг — `.env` рядом с бинарником (см. `.env.example`): `YD_TOKEN`, `YD_ROOT`,
 `QUEUE_DIR`, `POLL_INTERVAL`, `RETENTION_DAYS`, `CLAIM_TIMEOUT`, `STATE_FILE`, `LLM_*`.
 
-## Откат на почтовый канал
-
-```
-ssh ubuntu@<сервер> 'sudo systemctl stop yd-adapter && sudo systemctl start echo-bot'
-ssh ubuntu@<сервер> 'sudo systemctl stop echo-bot && sudo systemctl start yd-adapter'
-```
-
-Одновременно `echo-bot` и `yd-adapter` работать не должны — оба пишут в `queue/`.
