@@ -59,7 +59,7 @@ func (p *Puller) PullIn(st *State) (int, error) {
 			return 0, err
 		}
 	}
-	for _, d := range []string{"in", "out", "archive/in", "archive/out", "archive/broken"} {
+	for _, d := range []string{"in", "in/att", "out", "archive/in", "archive/out", "archive/broken"} {
 		if err := p.Client.EnsureDir(p.Root + "/" + d); err != nil {
 			return 0, err
 		}
@@ -183,6 +183,7 @@ func (p *Puller) processOne(name, id string) (handling, error) {
 	if err := p.Client.Move(p.in(name), p.archive("in", name)); err != nil && !isNameTaken(err) {
 		log.Printf("WARN: задача %s в inbox, но конверт не переложен в archive: %v", id, err)
 	}
+	p.cleanupAtt(id)
 	log.Printf("pull_in: задача %s (worker=%s, вложений %d) → inbox", id, env.Worker, len(localAtts))
 	return handlingQueued, nil
 }
@@ -198,6 +199,7 @@ func (p *Puller) handleChat(name, id string, env Envelope) (handling, error) {
 		if err := p.Client.Move(p.in(name), p.archive("in", name)); err != nil && !isNameTaken(err) {
 			log.Printf("WARN: chat %s отвечен (%s), но конверт не переложен: %v", id, envName, err)
 		}
+		p.cleanupAtt(id)
 		log.Printf("chat %s: отказ (%s), конверт %s", id, reason, envName)
 		return handlingReplied, nil
 	}
@@ -223,6 +225,7 @@ func (p *Puller) handleChat(name, id string, env Envelope) (handling, error) {
 	if err := p.Client.Move(p.in(name), p.archive("in", name)); err != nil && !isNameTaken(err) {
 		log.Printf("WARN: chat %s отвечен (%s), но конверт не переложен: %v", id, envName, err)
 	}
+	p.cleanupAtt(id)
 	log.Printf("chat %s: ответ LLM опубликован (%s)", id, envName)
 	return handlingReplied, nil
 }
@@ -266,6 +269,16 @@ func (p *Puller) download(name string) ([]byte, error) {
 }
 
 func (p *Puller) in(name string) string { return p.Root + "/in/" + name }
+
+// cleanupAtt убирает каталог входных вложений обработанного конверта.
+// Вложения уже скачаны в очередь; на Диске они больше не нужны (Delete на
+// отсутствующий путь — no-op). Правило протокола: чистит только адаптер.
+func (p *Puller) cleanupAtt(id string) {
+	dir := p.Root + "/in/att/" + id
+	if err := p.Client.Delete(dir); err != nil {
+		log.Printf("WARN: не удалось убрать вложения %s: %v", dir, err)
+	}
+}
 
 func (p *Puller) archive(d, name string) string {
 	return p.Root + "/archive/" + d + "/" + name

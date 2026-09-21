@@ -89,6 +89,11 @@ func TestInEnvelopeBecomesQueueTask(t *testing.T) {
 		t.Fatalf("вложение не доехало: %v %q", err, data)
 	}
 
+	// каталог входных вложений на Диске убран адаптером
+	if f.HasFile(root + "/in/att/" + msgID + "/photo.jpg") {
+		t.Fatal("in/att/<id>/ не очищен после обработки")
+	}
+
 	// tmp-файлов в inbox не остаётся
 	entries, _ := os.ReadDir(filepath.Join(q, "inbox"))
 	for _, e := range entries {
