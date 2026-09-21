@@ -191,10 +191,26 @@ func (c *YdClient) List(path string) ([]Resource, error) {
 	}
 }
 
-// Upload грузит файл одним PUT (всегда overwrite=false). 409/423 → ErrNameTaken.
+// Upload грузит файл одним PUT (overwrite=false). 409/423 → ErrNameTaken.
+// Так публикуются только конверты: имя уникально по построению (правило 3).
 func (c *YdClient) Upload(path string, data []byte) error {
+	return c.upload(path, data, false)
+}
+
+// UploadOverwrite грузит файл с overwrite=true. Нужен для повторной публикации
+// результата: путь вложения out/att/<id>/<name> детерминирован, и после обрыва
+// публикации файл на Диске уже существует. Конверты так не публикуются.
+func (c *YdClient) UploadOverwrite(path string, data []byte) error {
+	return c.upload(path, data, true)
+}
+
+func (c *YdClient) upload(path string, data []byte, overwrite bool) error {
+	ow := "false"
+	if overwrite {
+		ow = "true"
+	}
 	resp, err := c.doAPI(http.MethodGet,
-		"/resources/upload?path="+url.QueryEscape(path)+"&overwrite=false", nil)
+		"/resources/upload?path="+url.QueryEscape(path)+"&overwrite="+ow, nil)
 	if err != nil {
 		if isTaken(err) {
 			return ErrNameTaken

@@ -84,6 +84,38 @@ func TestRetryOn429(t *testing.T) {
 	}
 }
 
+// UploadOverwrite шлёт overwrite=true (нужно для повторной публикации вложений),
+// Upload остаётся строгим overwrite=false.
+func TestUploadOverwriteSendsFlag(t *testing.T) {
+	var gotOverwrite string
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/disk/resources/upload", func(w http.ResponseWriter, r *http.Request) {
+		gotOverwrite = r.URL.Query().Get("overwrite")
+		fmt.Fprintf(w, `{"href":%q,"method":"PUT"}`, apiURL(r)+"/put")
+	})
+	mux.HandleFunc("/put", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusCreated)
+	})
+	api := httptest.NewServer(mux)
+	defer api.Close()
+
+	c := NewYdClient("tok", api.URL+"/v1/disk", api.Client())
+	c.RetryPause = time.Millisecond
+
+	if err := c.UploadOverwrite("/echo/out/att/x/report.md", []byte("hi")); err != nil {
+		t.Fatalf("UploadOverwrite: %v", err)
+	}
+	if gotOverwrite != "true" {
+		t.Fatalf("overwrite = %q, want true", gotOverwrite)
+	}
+	if err := c.Upload("/echo/x.txt", []byte("hi")); err != nil {
+		t.Fatalf("Upload: %v", err)
+	}
+	if gotOverwrite != "false" {
+		t.Fatalf("overwrite = %q, want false (обычный Upload строгий)", gotOverwrite)
+	}
+}
+
 func TestEnsureDirCreatesParents(t *testing.T) {
 	var created []string
 	mux := http.NewServeMux()

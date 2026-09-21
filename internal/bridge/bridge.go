@@ -339,7 +339,10 @@ func (p *Puller) PushOut() (int, error) {
 		}
 		ok, err := p.publishOne(outbox, e.Name())
 		if err != nil {
-			return published, err
+			// один сбойный результат не должен блокировать остальные: он остаётся
+			// в outbox/ до следующего цикла, публикуем всё, что можем
+			log.Printf("ERROR: результат %s не опубликован: %v", e.Name(), err)
+			continue
 		}
 		if ok {
 			published++
@@ -383,7 +386,9 @@ func (p *Puller) publishOne(outbox, name string) (bool, error) {
 		if err := p.Client.EnsureDir(p.Root + "/out/att/" + id); err != nil {
 			return false, err
 		}
-		if err := p.Client.Upload(dst, data); err != nil {
+		// overwrite: путь вложения детерминирован (out/att/<id>/<имя>), и повторная
+		// публикация после обрыва должна затирать прошлую попытку, а не падать 409
+		if err := p.Client.UploadOverwrite(dst, data); err != nil {
 			return false, fmt.Errorf("вложение %s: %w", dst, err)
 		}
 		diskAtts = append(diskAtts, Att{

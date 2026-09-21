@@ -179,14 +179,15 @@ func (f *Fake) handleUploadHref(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusBadRequest, "bad path")
 		return
 	}
-	if r.URL.Query().Get("overwrite") != "false" {
-		httpError(w, http.StatusBadRequest, "протокол запрещает overwrite=true")
+	overwrite := r.URL.Query().Get("overwrite")
+	if overwrite != "false" && overwrite != "true" {
+		httpError(w, http.StatusBadRequest, "overwrite должен быть true или false")
 		return
 	}
 	f.mu.Lock()
 	exists := f.dirs[path] || f.hasFileLocked(path)
 	f.mu.Unlock()
-	if exists {
+	if exists && overwrite == "false" {
 		httpError(w, http.StatusConflict, "уже существует")
 		return
 	}

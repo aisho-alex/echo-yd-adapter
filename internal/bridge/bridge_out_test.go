@@ -160,6 +160,55 @@ func TestPushOutMissingAttachmentKeepsResult(t *testing.T) {
 	}
 }
 
+// Повторная публикация: вложение уже на Диске (прошлая попытка) — overwrite
+// затирает его, а не падает 409.
+func TestPushOutRepublishOverwritesAttachment(t *testing.T) {
+	f, p, _, q := setup(t)
+	seedResult(t, q, msgID, "ответ")
+	f.Put(root+"/out/att/"+msgID+"/report.md", []byte("прошлая попытка"))
+
+	n, err := p.PushOut()
+	if err != nil || n != 1 {
+		t.Fatalf("PushOut = %d, %v; want 1, nil (повторная публикация)", n, err)
+	}
+	if got := string(f.Files()[root+"/out/att/"+msgID+"/report.md"]); got != "# отчёт" {
+		t.Fatalf("вложение не перезаписано: %q", got)
+	}
+}
+
+// Один сбойный результат не блокирует публикацию остальных и остаётся в outbox.
+func TestPushOutContinuesAfterBadResult(t *testing.T) {
+	f, p, _, q := setup(t)
+	// плохой результат идёт первым по имени; вложение — каталог, ReadFile упадёт
+	bad := "20260918T150000Z-baad"
+	if err := os.MkdirAll(filepath.Join(q, "files", bad, "out", "report.md"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(q, "outbox"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body, _ := json.Marshal(OutResult{
+		ID: bad, OK: true, Worker: "laptop", Text: "плохой",
+		Attachments: []Att{{Path: "files/" + bad + "/out/report.md", Name: "report.md"}},
+	})
+	writeFile(t, filepath.Join(q, "outbox", bad+".json"), string(body))
+	seedResult(t, q, msgID, "хороший")
+
+	n, err := p.PushOut()
+	if err != nil {
+		t.Fatalf("PushOut: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("PushOut = %d, want 1 (хороший опубликован несмотря на сбойный)", n)
+	}
+	if _, err := os.Stat(filepath.Join(q, "outbox", bad+".json")); err != nil {
+		t.Fatal("сбойный результат потерян из outbox")
+	}
+	if !f.HasFile(root + "/out/att/" + msgID + "/report.md") {
+		t.Fatal("хороший результат не опубликован")
+	}
+}
+
 func TestPushOutTextOnlyResult(t *testing.T) {
 	f, p, _, q := setup(t)
 	if err := os.MkdirAll(filepath.Join(q, "outbox"), 0o755); err != nil {

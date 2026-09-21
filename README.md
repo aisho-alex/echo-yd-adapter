@@ -62,6 +62,21 @@ ssh ubuntu@<сервер> 'sudo systemctl stop echo-bot && sudo systemctl start 
 
 Имена файлов `20260918T150233Z-a1b2.json`: сортировка по имени = хронология.
 
+## Защита от прогонов по кругу
+
+Воркер забирает задачу атомарным `mv` в `claimed/<id>.json.<worker>` и дальше держит
+claim живым: `touch` сразу после захвата и каждые 60 с (heartbeat). Адаптер каждые
+`POLL_INTERVAL` возвращает в `inbox/` claim'ы старше `CLAIM_TIMEOUT`, но с двумя
+предохранителями:
+
+- если результат задачи уже в `outbox/` или `done/` — агента не перезапускают,
+  stale-claim просто убирается;
+- задачу, возвращённую `RECLAIM_PARK_AFTER` раз (по умолчанию 3), адаптер паркует
+  в `queue/parked/` вместо `inbox/` — цена ошибки ограничена, цикла нет.
+
+Без `touch` после `mv` claim наследует mtime конверта (задача ждала в inbox часы),
+сразу выглядит просроченным и крутится: агент выполняет её снова и снова.
+
 ## Структура
 
 ```
@@ -96,8 +111,9 @@ yd-adapter            # демон: POLL_INTERVAL=10 c
 ```
 
 Конфиг — `.env` рядом с бинарником (см. `.env.example`): `YD_TOKEN`, `YD_ROOT`,
-`QUEUE_DIR`, `POLL_INTERVAL`, `RETENTION_DAYS`, `CLAIM_TIMEOUT`, `STATE_FILE`, `LLM_*`,
-`NTFY_URL` (по умолчанию `https://ntfy.sh`), `NTFY_TOPIC` (пусто — push выключен).
+`QUEUE_DIR`, `POLL_INTERVAL`, `RETENTION_DAYS`, `CLAIM_TIMEOUT`, `RECLAIM_PARK_AFTER`,
+`STATE_FILE`, `LLM_*`, `NTFY_URL` (по умолчанию `https://ntfy.sh`),
+`NTFY_TOPIC` (пусто — push выключен).
 
 ## Push о новых ответах (ntfy)
 

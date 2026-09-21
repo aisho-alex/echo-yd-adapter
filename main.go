@@ -63,6 +63,7 @@ func main() {
 	} else {
 		log.Printf("push: выключен (NTFY_TOPIC не задан)")
 	}
+	rc := reclaim.New(cfg.ReclaimParkAfter)
 
 	if *dryRun {
 		printState(p, st)
@@ -87,7 +88,7 @@ func main() {
 		} else if pushed > 0 {
 			log.Printf("push_out: %d результатов", pushed)
 		}
-		if rec, err := reclaim.Run(cfg.QueueDir, cfg.ClaimTimeout); err != nil {
+		if rec, err := rc.Run(cfg.QueueDir, cfg.ClaimTimeout); err != nil {
 			log.Printf("ERROR: reclaim: %v", err)
 		} else if rec > 0 {
 			log.Printf("reclaim: %d задач", rec)
@@ -132,7 +133,7 @@ func runCheck(p *bridge.Puller, st *bridge.State, cfg config.Config) int {
 			ok("папка %s доступна", d)
 		}
 	}
-	for _, d := range []string{"inbox", "claimed", "outbox", "done", "files"} {
+	for _, d := range []string{"inbox", "claimed", "outbox", "done", "files", "parked"} {
 		dir := filepath.Join(cfg.QueueDir, d)
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			fail("очередь %s: %v", d, err)
@@ -181,8 +182,8 @@ func printState(p *bridge.Puller, st *bridge.State) {
 		}
 		return fmt.Sprintf("%d", len(entries))
 	}
-	log.Printf("Очередь %s: inbox=%s claimed=%s outbox=%s done=%s",
-		p.QueueDir, qcount("inbox"), qcount("claimed"), qcount("outbox"), qcount("done"))
+	log.Printf("Очередь %s: inbox=%s claimed=%s outbox=%s done=%s parked=%s",
+		p.QueueDir, qcount("inbox"), qcount("claimed"), qcount("outbox"), qcount("done"), qcount("parked"))
 	if p.Ntfy != nil {
 		log.Printf("Push: ntfy %s (топик задан)", p.Ntfy.BaseURL)
 	} else {

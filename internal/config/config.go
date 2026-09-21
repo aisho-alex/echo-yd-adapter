@@ -20,6 +20,10 @@ type Config struct {
 	ClaimTimeout  time.Duration
 	StateFile     string
 
+	// ReclaimParkAfter — сколько раз задачу можно вернуть в inbox, прежде чем
+	// запарковать (0 — не парковать; защита от прогонов по кругу).
+	ReclaimParkAfter int
+
 	LLMBaseURL string
 	LLMAPIKey  string
 	LLMModel   string
@@ -49,9 +53,11 @@ func Load(envFile string) (Config, error) {
 		PollInterval:  10 * time.Second,
 		RetentionDays: 30,
 		ClaimTimeout:  1800 * time.Second,
-		LLMTimeout:    120 * time.Second,
-		NtfyURL:       orDefault(os.Getenv("NTFY_URL"), "https://ntfy.sh"),
-		NtfyTopic:     os.Getenv("NTFY_TOPIC"),
+
+		ReclaimParkAfter: 3,
+		LLMTimeout:       120 * time.Second,
+		NtfyURL:          orDefault(os.Getenv("NTFY_URL"), "https://ntfy.sh"),
+		NtfyTopic:        os.Getenv("NTFY_TOPIC"),
 	}
 	var err error
 	if v := os.Getenv("POLL_INTERVAL"); v != "" {
@@ -67,6 +73,11 @@ func Load(envFile string) (Config, error) {
 	if v := os.Getenv("CLAIM_TIMEOUT"); v != "" {
 		if cfg.ClaimTimeout, err = parseSeconds(v); err != nil {
 			return cfg, keyErr("CLAIM_TIMEOUT", err)
+		}
+	}
+	if v := os.Getenv("RECLAIM_PARK_AFTER"); v != "" {
+		if cfg.ReclaimParkAfter, err = strconv.Atoi(v); err != nil {
+			return cfg, keyErr("RECLAIM_PARK_AFTER", err)
 		}
 	}
 	if v := os.Getenv("LLM_TIMEOUT"); v != "" {
