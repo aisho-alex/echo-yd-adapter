@@ -58,6 +58,7 @@ ssh ubuntu@<сервер> 'sudo systemctl stop echo-bot && sudo systemctl start 
 /echo/in/         конверты задач от телефона (+ in/att/<msgid>/ — вложения)
 /echo/out/        конверты ответов (+ out/att/<msgid>/)
 /echo/archive/    in/ — обработано, out/ — забрано, broken/ — мусор
+/echo/progress/   маркеры «в работе»: адаптер держит, пока воркер держит claim
 ```
 
 Имена файлов `20260918T150233Z-a1b2.json`: сортировка по имени = хронология.

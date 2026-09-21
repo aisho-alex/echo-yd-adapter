@@ -93,6 +93,10 @@ func main() {
 		} else if rec > 0 {
 			log.Printf("reclaim: %d задач", rec)
 		}
+		// после reclaim: маркеры «в работе» отражают актуальные claim'ы
+		if err := p.Progress(); err != nil {
+			log.Printf("ERROR: progress: %v", err)
+		}
 	}
 	lastRetention := time.Time{}
 	for {
@@ -126,7 +130,7 @@ func runCheck(p *bridge.Puller, st *bridge.State, cfg config.Config) int {
 	} else {
 		ok("токен Диска живой (%s)", apiBase)
 	}
-	for _, d := range []string{"in", "out", "archive/in", "archive/out", "archive/broken"} {
+	for _, d := range []string{"in", "out", "archive/in", "archive/out", "archive/broken", "progress"} {
 		if err := p.Client.EnsureDir(cfg.YDRoot + "/" + d); err != nil {
 			fail("папка %s: %v", d, err)
 		} else {
@@ -173,8 +177,8 @@ func printState(p *bridge.Puller, st *bridge.State) {
 		}
 		return fmt.Sprintf("%d", len(items))
 	}
-	log.Printf("Диск %s: in=%s out=%s archive/in=%s archive/out=%s archive/broken=%s",
-		p.Root, count("in"), count("out"), count("archive/in"), count("archive/out"), count("archive/broken"))
+	log.Printf("Диск %s: in=%s out=%s archive/in=%s archive/out=%s archive/broken=%s progress=%s",
+		p.Root, count("in"), count("out"), count("archive/in"), count("archive/out"), count("archive/broken"), count("progress"))
 	qcount := func(dir string) string {
 		entries, err := os.ReadDir(filepath.Join(p.QueueDir, dir))
 		if err != nil {

@@ -412,6 +412,92 @@ func (p *Puller) publishOne(outbox, name string) (bool, error) {
 	return true, nil
 }
 
+// ---------- прогресс выполнения: маркеры в progress/ ----------
+
+// ProgressState — маркер «агент взялся за задачу». Клиент по нему рисует
+// «в работе» между «доставлено» и «есть ответ».
+type ProgressState struct {
+	ID     string `json:"id"`
+	State  string `json:"state"` // "working"
+	Worker string `json:"worker"`
+	TS     int64  `json:"ts"`
+}
+
+// Progress публикует маркеры по локальным claim'ам и убирает маркеры задач,
+// которые больше не в работе. Путь детерминирован (progress/<id>.json), поэтому
+// запись — с overwrite=true; это best effort, источник истины — out/.
+func (p *Puller) Progress() error {
+	if err := p.Client.EnsureDir(p.Root + "/progress"); err != nil {
+		return err
+	}
+	claimed, err := p.claimed()
+	if err != nil {
+		return err
+	}
+	now := time.Now().Unix()
+	for id, worker := range claimed {
+		body, err := json.Marshal(ProgressState{ID: id, State: "working", Worker: worker, TS: now})
+		if err != nil {
+			return err
+		}
+		if err := p.Client.UploadOverwrite(p.Root+"/progress/"+id+".json", body); err != nil {
+			return fmt.Errorf("progress %s: %w", id, err)
+		}
+	}
+	items, err := p.Client.List(p.Root + "/progress")
+	if err != nil {
+		return err
+	}
+	for _, it := range items {
+		if it.Type != "file" || !strings.HasSuffix(it.Name, ".json") {
+			continue
+		}
+		if _, ok := claimed[strings.TrimSuffix(it.Name, ".json")]; ok {
+			continue
+		}
+		if err := p.Client.Delete(p.Root + "/progress/" + it.Name); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// claimed — активные захваты локальной очереди: id → worker.
+func (p *Puller) claimed() (map[string]string, error) {
+	entries, err := os.ReadDir(filepath.Join(p.QueueDir, "claimed"))
+	if os.IsNotExist(err) {
+		return map[string]string{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]string{}
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		worker, base, ok := splitClaim(e.Name())
+		if !ok {
+			continue
+		}
+		out[strings.TrimSuffix(base, ".json")] = worker
+	}
+	return out, nil
+}
+
+// splitClaim разбирает "<id>.json.<worker>"; ok=false для всего остального.
+func splitClaim(name string) (worker, base string, ok bool) {
+	i := strings.LastIndex(name, ".")
+	if i < 0 {
+		return "", "", false
+	}
+	base, worker = name[:i], name[i+1:]
+	if worker == "" || !strings.HasSuffix(base, ".json") {
+		return "", "", false
+	}
+	return worker, base, true
+}
+
 func randomSalt() string {
 	b := make([]byte, 2)
 	if _, err := crand.Read(b); err != nil {
