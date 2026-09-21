@@ -158,7 +158,11 @@ func TestBrokenJSONGoesToArchiveBroken(t *testing.T) {
 	if !st.Has(bad) {
 		t.Fatal("битый конверт не помечен в state — будет вечно перебираться")
 	}
+	// E6: файл без .json тоже уезжает в archive/broken, in/ не засоряется
+	if !f.HasFile(root + "/archive/broken/readme.txt") {
+		t.Fatal("не-json файл не убран в archive/broken")
+	}
 	if f.HasFile(root + "/in/readme.txt") {
-		t.Log("note: не-json файл остаётся в in/ до ретеншна")
+		t.Fatal("не-json файл остался в in/")
 	}
 }

@@ -71,9 +71,18 @@ func (p *Puller) PullIn(st *State) (int, error) {
 	}
 	var names []string
 	for _, it := range items {
-		if it.Type == "file" && strings.HasSuffix(it.Name, ".json") {
-			names = append(names, it.Name)
+		if it.Type != "file" {
+			continue
 		}
+		if !strings.HasSuffix(it.Name, ".json") {
+			// не конверт: по протоколу (E6) — в archive/broken, не зацикливаемся
+			log.Printf("WARN: %s/in/%s не конверт — перекладываю в archive/broken", p.Root, it.Name)
+			if err := p.Client.Move(p.in(it.Name), p.archive("broken", it.Name)); err != nil && !isNameTaken(err) {
+				return 0, err // до подсчёта обработанных ещё не дошли
+			}
+			continue
+		}
+		names = append(names, it.Name)
 	}
 	sort.Strings(names) // имя = хронология
 
