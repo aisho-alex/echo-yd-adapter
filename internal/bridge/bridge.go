@@ -378,17 +378,15 @@ func (p *Puller) publishOne(outbox, name string) (bool, error) {
 	// 1. вложения
 	diskAtts := make([]Att, 0, len(local))
 	for _, a := range local {
-		data, err := os.ReadFile(a.path)
-		if err != nil {
-			return false, err
-		}
 		dst := p.Root + "/out/att/" + id + "/" + a.name
 		if err := p.Client.EnsureDir(p.Root + "/out/att/" + id); err != nil {
 			return false, err
 		}
 		// overwrite: путь вложения детерминирован (out/att/<id>/<имя>), и повторная
 		// публикация после обрыва должна затирать прошлую попытку, а не падать 409
-		if err := p.Client.UploadOverwrite(dst, data); err != nil {
+		// Потоком (UploadFile), а не []byte: канал держит до 2 ГБ на файл, и
+		// os.ReadFile здесь съел бы всю память сервера.
+		if err := p.Client.UploadFile(dst, a.path, true); err != nil {
 			return false, fmt.Errorf("вложение %s: %w", dst, err)
 		}
 		diskAtts = append(diskAtts, Att{

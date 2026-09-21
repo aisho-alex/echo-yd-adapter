@@ -1,11 +1,14 @@
 package ydisk
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -113,6 +116,58 @@ func TestUploadOverwriteSendsFlag(t *testing.T) {
 	}
 	if gotOverwrite != "false" {
 		t.Fatalf("overwrite = %q, want false (обычный Upload строгий)", gotOverwrite)
+	}
+}
+
+// UploadFile грузит файл с диска ПОТОКОМ: содержимое доезжает байт в байт,
+// размер известен заранее (Content-Length), а после 5xx на PUT файл
+// переоткрывается — поток нельзя перемотать, поэтому ретрай обязан его взять заново.
+func TestUploadFileStreamsAndRetries(t *testing.T) {
+	payload := make([]byte, 5<<20) // 5 МБ: смысл в том, что файл не читается в память целиком
+	for i := range payload {
+		payload[i] = byte(i * 31)
+	}
+	src := filepath.Join(t.TempDir(), "big.bin")
+	if err := os.WriteFile(src, payload, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var puts int
+	var gotLen int64
+	var got []byte
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/disk/resources/upload", func(w http.ResponseWriter, r *http.Request) {
+		if ow := r.URL.Query().Get("overwrite"); ow != "true" {
+			t.Errorf("overwrite = %q, want true", ow)
+		}
+		fmt.Fprintf(w, `{"href":%q,"method":"PUT"}`, apiURL(r)+"/put")
+	})
+	mux.HandleFunc("/put", func(w http.ResponseWriter, r *http.Request) {
+		puts++
+		if puts == 1 {
+			http.Error(w, "boom", http.StatusInternalServerError)
+			return
+		}
+		gotLen = r.ContentLength
+		got, _ = io.ReadAll(r.Body)
+		w.WriteHeader(http.StatusCreated)
+	})
+	api := httptest.NewServer(mux)
+	defer api.Close()
+
+	c := NewYdClient("tok", api.URL+"/v1/disk", api.Client())
+	c.RetryPause = time.Millisecond
+	if err := c.UploadFile("/echo/out/att/x/big.bin", src, true); err != nil {
+		t.Fatalf("UploadFile: %v", err)
+	}
+	if puts != 2 {
+		t.Fatalf("puts = %d, want 2 (после 5xx — повтор PUT)", puts)
+	}
+	if gotLen != int64(len(payload)) {
+		t.Fatalf("Content-Length = %d, want %d", gotLen, len(payload))
+	}
+	if !bytes.Equal(got, payload) {
+		t.Fatalf("тело PUT не совпало с файлом (получено %d байт)", len(got))
 	}
 }
 

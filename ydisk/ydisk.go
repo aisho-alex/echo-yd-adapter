@@ -3,12 +3,14 @@
 package ydisk
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -123,6 +125,50 @@ func (c *YdClient) do(method, rawURL string, body []byte) (*http.Response, error
 	return nil, fmt.Errorf("ydisk: %s %s: исчерпаны попытки", method, rawURL)
 }
 
+// doStream — как do, но тело запроса берётся из фабрики open: поток нельзя
+// перемотать, а do ретраит запрос, поэтому на КАЖДУЮ попытку файл открывается
+// заново. Так грузятся вложения (канал держит до 2 ГБ на файл — держать такой
+// файл в памяти нельзя).
+func (c *YdClient) doStream(method, rawURL string,
+	open func() (io.ReadCloser, int64, error)) (*http.Response, error) {
+	var resp *http.Response
+	var err error
+	pause := c.RetryPause
+	const attempts = 3
+	for i := 0; i < attempts; i++ {
+		if i > 0 {
+			time.Sleep(pause)
+			pause *= 2
+		}
+		body, size, oerr := open()
+		if oerr != nil {
+			return nil, fmt.Errorf("ydisk: %s %s: %w", method, rawURL, oerr)
+		}
+		var req *http.Request
+		req, err = http.NewRequest(method, rawURL, body)
+		if err != nil {
+			body.Close()
+			return nil, err
+		}
+		req.ContentLength = size
+		req.Header.Set("Authorization", "OAuth "+c.token)
+		req.Header.Set("Content-Type", "application/octet-stream")
+		resp, err = c.hc.Do(req)
+		if err != nil {
+			continue // сетевая ошибка — ретрай
+		}
+		if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500 {
+			drainClose(resp)
+			continue
+		}
+		return resp, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("ydisk: %s %s: %w", method, rawURL, err)
+	}
+	return nil, fmt.Errorf("ydisk: %s %s: исчерпаны попытки", method, rawURL)
+}
+
 // doAPI — запрос к apiBase с проверкой статуса.
 func (c *YdClient) doAPI(method, pathQuery string, body []byte) (*http.Response, error) {
 	resp, err := c.do(method, c.apiBase+pathQuery, body)
@@ -204,7 +250,32 @@ func (c *YdClient) UploadOverwrite(path string, data []byte) error {
 	return c.upload(path, data, true)
 }
 
+// UploadFile грузит файл с локального диска ПОТОКОМ (overwrite задаётся явно).
+// Нужен для вложений результата: канал держит файлы до 2 ГБ, а os.ReadFile на
+// таком файле съел бы всю память процесса адаптера.
+func (c *YdClient) UploadFile(path, localPath string, overwrite bool) error {
+	fi, err := os.Stat(localPath)
+	if err != nil {
+		return err
+	}
+	return c.uploadStream(path, overwrite, func() (io.ReadCloser, int64, error) {
+		f, oerr := os.Open(localPath)
+		if oerr != nil {
+			return nil, 0, oerr
+		}
+		return f, fi.Size(), nil
+	})
+}
+
 func (c *YdClient) upload(path string, data []byte, overwrite bool) error {
+	return c.uploadStream(path, overwrite, func() (io.ReadCloser, int64, error) {
+		return io.NopCloser(bytes.NewReader(data)), int64(len(data)), nil
+	})
+}
+
+// uploadStream — общая часть загрузки: взять href у API и залить тело одним PUT.
+func (c *YdClient) uploadStream(path string, overwrite bool,
+	open func() (io.ReadCloser, int64, error)) error {
 	ow := "false"
 	if overwrite {
 		ow = "true"
@@ -225,7 +296,7 @@ func (c *YdClient) upload(path string, data []byte, overwrite bool) error {
 	if err != nil {
 		return fmt.Errorf("ydisk: Upload(%s): %w", path, err)
 	}
-	put, err := c.do(http.MethodPut, href.Href, data)
+	put, err := c.doStream(http.MethodPut, href.Href, open)
 	if err != nil {
 		return err
 	}
