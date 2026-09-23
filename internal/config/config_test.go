@@ -11,7 +11,8 @@ func TestLoadDefaultsAndEnvFile(t *testing.T) {
 	// изолируем среду
 	clear := []string{"YD_TOKEN", "YD_ROOT", "QUEUE_DIR", "STATE_FILE", "POLL_INTERVAL",
 		"RETENTION_DAYS", "CLAIM_TIMEOUT", "LLM_BASE_URL", "LLM_API_KEY", "LLM_MODEL",
-		"LLM_SYSTEM", "LLM_TIMEOUT"}
+		"LLM_SYSTEM", "LLM_TIMEOUT", "STT_BASE_URL", "STT_API_KEY", "STT_MODEL",
+		"STT_TIMEOUT", "STT_MAX_MB"}
 	for _, k := range clear {
 		t.Setenv(k, "")
 		os.Unsetenv(k)
@@ -42,6 +43,38 @@ LLM_API_KEY=sk-x
 	}
 	if cfg.LLMBaseURL != "https://api.neuraldeep.ru/v1" || cfg.LLMAPIKey != "sk-x" {
 		t.Fatalf("LLM cfg = %+v", cfg)
+	}
+	// STT без явных STT_* ходит адресом и ключом LLM
+	if cfg.STTBaseURL != cfg.LLMBaseURL || cfg.STTAPIKey != "sk-x" {
+		t.Fatalf("STT должен наследовать LLM: %+v", cfg)
+	}
+	if cfg.STTModel != "whisper-1" || cfg.STTTimeout != 120*time.Second || cfg.STTMaxMB != 20 {
+		t.Fatalf("STT умолчания = %+v", cfg)
+	}
+}
+
+func TestSttExplicitOverrides(t *testing.T) {
+	for _, k := range []string{"LLM_API_KEY", "STT_BASE_URL", "STT_API_KEY", "STT_MODEL",
+		"STT_TIMEOUT", "STT_MAX_MB"} {
+		t.Setenv(k, "")
+		os.Unsetenv(k)
+	}
+	t.Setenv("LLM_API_KEY", "sk-llm")
+	t.Setenv("STT_BASE_URL", "https://stt.example/v1")
+	t.Setenv("STT_API_KEY", "sk-stt")
+	t.Setenv("STT_MODEL", "whisper-large")
+	t.Setenv("STT_TIMEOUT", "30")
+	t.Setenv("STT_MAX_MB", "5")
+
+	cfg, err := Load(filepath.Join(t.TempDir(), "missing.env"))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.STTBaseURL != "https://stt.example/v1" || cfg.STTAPIKey != "sk-stt" {
+		t.Fatalf("STT cfg = %+v", cfg)
+	}
+	if cfg.STTModel != "whisper-large" || cfg.STTTimeout != 30*time.Second || cfg.STTMaxMB != 5 {
+		t.Fatalf("STT cfg = %+v", cfg)
 	}
 }
 

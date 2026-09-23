@@ -30,6 +30,14 @@ type Config struct {
 	LLMSystem  string
 	LLMTimeout time.Duration
 
+	// STT — распознавание речи для голосовых задач (kind:agent + voice).
+	// По умолчанию берёт адрес и ключ LLM (тот же OpenAI-совместимый провайдер).
+	STTBaseURL string
+	STTAPIKey  string
+	STTModel   string
+	STTTimeout time.Duration
+	STTMaxMB   int
+
 	NtfyURL   string
 	NtfyTopic string // пусто — push выключен
 }
@@ -56,9 +64,15 @@ func Load(envFile string) (Config, error) {
 
 		ReclaimParkAfter: 3,
 		LLMTimeout:       120 * time.Second,
+		STTModel:         orDefault(os.Getenv("STT_MODEL"), "whisper-1"),
+		STTTimeout:       120 * time.Second,
+		STTMaxMB:         20,
 		NtfyURL:          orDefault(os.Getenv("NTFY_URL"), "https://ntfy.sh"),
 		NtfyTopic:        os.Getenv("NTFY_TOPIC"),
 	}
+	// STT по умолчанию ходит тем же провайдером и ключом, что LLM
+	cfg.STTBaseURL = orDefault(os.Getenv("STT_BASE_URL"), cfg.LLMBaseURL)
+	cfg.STTAPIKey = orDefault(os.Getenv("STT_API_KEY"), cfg.LLMAPIKey)
 	var err error
 	if v := os.Getenv("POLL_INTERVAL"); v != "" {
 		if cfg.PollInterval, err = parseSeconds(v); err != nil {
@@ -83,6 +97,16 @@ func Load(envFile string) (Config, error) {
 	if v := os.Getenv("LLM_TIMEOUT"); v != "" {
 		if cfg.LLMTimeout, err = parseSeconds(v); err != nil {
 			return cfg, keyErr("LLM_TIMEOUT", err)
+		}
+	}
+	if v := os.Getenv("STT_TIMEOUT"); v != "" {
+		if cfg.STTTimeout, err = parseSeconds(v); err != nil {
+			return cfg, keyErr("STT_TIMEOUT", err)
+		}
+	}
+	if v := os.Getenv("STT_MAX_MB"); v != "" {
+		if cfg.STTMaxMB, err = strconv.Atoi(v); err != nil {
+			return cfg, keyErr("STT_MAX_MB", err)
 		}
 	}
 	return cfg, nil

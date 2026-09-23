@@ -21,6 +21,7 @@ import (
 	"yd-adapter/internal/notify"
 	"yd-adapter/internal/reclaim"
 	"yd-adapter/internal/retention"
+	"yd-adapter/internal/stt"
 	"yd-adapter/ydisk"
 )
 
@@ -62,6 +63,19 @@ func main() {
 		log.Printf("push: ntfy %s (топик задан)", cfg.NtfyURL)
 	} else {
 		log.Printf("push: выключен (NTFY_TOPIC не задан)")
+	}
+	if cfg.STTAPIKey != "" {
+		p.STT = stt.New(stt.Config{
+			BaseURL:  cfg.STTBaseURL,
+			APIKey:   cfg.STTAPIKey,
+			Model:    cfg.STTModel,
+			Timeout:  cfg.STTTimeout,
+			MaxBytes: int64(cfg.STTMaxMB) << 20,
+			Retries:  2,
+		})
+		log.Printf("stt: %s (%s)", cfg.STTBaseURL, cfg.STTModel)
+	} else {
+		log.Printf("WARN: STT_API_KEY не задан — голосовые конверты будут получать отказ")
 	}
 	rc := reclaim.New(cfg.ReclaimParkAfter)
 
@@ -193,7 +207,7 @@ func printState(p *bridge.Puller, st *bridge.State) {
 	} else {
 		log.Printf("Push: выключен")
 	}
-	log.Printf("Состояние: обработано id=%d, chat=%v", st.Count(), p.Chat != nil)
+	log.Printf("Состояние: обработано id=%d, chat=%v, stt=%v", st.Count(), p.Chat != nil, p.STT != nil)
 }
 
 // setupLog приводит логи к формату «2006-01-02 15:04:05 LEVEL сообщение»

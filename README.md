@@ -88,6 +88,7 @@ internal/bridge/       мосты Диск ⇄ очередь, state.json
 internal/reclaim/      возврат просроченных claim'ов в inbox/
 internal/retention/    чистка archive/ по RETENTION_DAYS
 internal/chatllm/      ответы на kind: chat через LLM
+internal/stt/          распознавание речи для голосовых задач (/audio/transcriptions)
 internal/notify/       push о новых ответах через ntfy (best effort, без текста)
 docs/PROTOCOL.md       спецификация файлового канала (канон)
 docs/token-notes.md    процедура и учёт OAuth-токенов (без самих токенов)
@@ -113,8 +114,19 @@ yd-adapter            # демон: POLL_INTERVAL=10 c
 
 Конфиг — `.env` рядом с бинарником (см. `.env.example`): `YD_TOKEN`, `YD_ROOT`,
 `QUEUE_DIR`, `POLL_INTERVAL`, `RETENTION_DAYS`, `CLAIM_TIMEOUT`, `RECLAIM_PARK_AFTER`,
-`STATE_FILE`, `LLM_*`, `NTFY_URL` (по умолчанию `https://ntfy.sh`),
-`NTFY_TOPIC` (пусто — push выключен).
+`STATE_FILE`, `LLM_*`, `STT_*` (распознавание голосовых; по умолчанию берёт адрес и
+ключ LLM), `NTFY_URL` (по умолчанию `https://ntfy.sh`), `NTFY_TOPIC` (пусто — push
+выключен).
+
+## Голосовые сообщения
+
+Телефон шлёт конверт `kind:agent` с `voice:true`, пустым `text` и ровно одним
+аудио-вложением (`in/att/<msgid>/<msgid>-voice.m4a`, mime `audio/mp4`). Адаптер
+скачивает аудио, расшифровывает его через OpenAI-совместимый `/audio/transcriptions`
+(`STT_*`) и ставит воркеру задачу с текстом транскрипта; аудио остаётся вложением
+задачи. Если STT недоступен или текст пуст — в `out/` уходит `ok=false` с причиной,
+задача в очередь не попадает. Конверт `voice:true` без единственного аудио-вложения
+считается нарушением протокола и уезжает в `archive/broken`.
 
 ## Push о новых ответах (ntfy)
 

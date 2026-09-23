@@ -18,6 +18,7 @@ import (
 
 	"yd-adapter/internal/chatllm"
 	"yd-adapter/internal/notify"
+	"yd-adapter/internal/stt"
 	"yd-adapter/ydisk"
 )
 
@@ -27,6 +28,7 @@ type Puller struct {
 	Root     string          // корень канала на Диске, напр. "/echo"
 	QueueDir string          // локальный каталог очереди
 	Chat     *chatllm.Client // nil — chat-конверты не поддерживаются
+	STT      *stt.Client     // nil — голосовые конверты получают отказ
 	Ntfy     *notify.Client  // nil — push-уведомления выключены
 }
 
@@ -37,6 +39,7 @@ type Envelope struct {
 	Kind        string    `json:"kind"`
 	Text        string    `json:"text"`
 	Worker      string    `json:"worker"`
+	Voice       bool      `json:"voice"` // голосовая задача: text пуст, аудио — во вложениях
 	Context     []CtxItem `json:"context"`
 	Attachments []Att     `json:"attachments"`
 }
@@ -141,52 +144,22 @@ func (p *Puller) processOne(name, id string) (handling, error) {
 		return p.handleChat(name, id, env)
 	}
 
-	// вложения публикуются до конверта, но докачка может совпасть:
-	// если чего-то нет — оставляем конверт в in/ на следующий цикл
-	localAtts := make([]Att, 0, len(env.Attachments))
-	for _, att := range env.Attachments {
-		src := p.Root + "/" + strings.TrimPrefix(att.Path, "/")
-		dst := filepath.Join(p.QueueDir, "files", id, "in", att.Name)
-		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-			return handlingDeferred, err
-		}
-		out, err := os.Create(dst)
-		if err != nil {
-			return handlingDeferred, err
-		}
-		if err := p.Client.Download(src, out); err != nil {
-			out.Close()
-			log.Printf("WARN: вложение %s не скачалось (%v) — задача %s отложена", att.Path, err, id)
-			return handlingDeferred, nil
-		}
-		if err := out.Close(); err != nil {
-			return handlingDeferred, err
-		}
-		localAtts = append(localAtts, Att{
-			Path: filepath.ToSlash(filepath.Join("files", id, "in", att.Name)),
-			Name: att.Name,
-			Mime: att.Mime,
-		})
+	// голосовая задача: аудио расшифровывает адаптер, воркер получает текст
+	if env.Voice {
+		return p.handleVoice(name, id, env)
 	}
 
-	task := map[string]any{
-		"id":          id,
-		"worker":      env.Worker,
-		"task":        env.Text,
-		"context":     env.Context,
-		"attachments": localAtts,
-		"chat_id":     0, // почтового чата больше нет; поле нужно схеме воркера
-	}
-	body, err := json.Marshal(task)
+	// вложения публикуются до конверта, но докачка может совпасть:
+	// если чего-то нет — оставляем конверт в in/ на следующий цикл
+	localAtts, deferred, err := p.downloadAtts(id, env.Attachments)
 	if err != nil {
 		return handlingDeferred, err
 	}
-	dst := filepath.Join(p.QueueDir, "inbox", id+".json")
-	tmp := dst + ".tmp"
-	if err := os.WriteFile(tmp, body, 0o644); err != nil {
-		return handlingDeferred, err
+	if deferred {
+		return handlingDeferred, nil
 	}
-	if err := os.Rename(tmp, dst); err != nil {
+
+	if err := p.queueTask(id, env.Worker, env.Text, env.Context, localAtts); err != nil {
 		return handlingDeferred, err
 	}
 	// задача уже в inbox: сбой перекладки в archive не должен приводить к повторной
@@ -197,6 +170,60 @@ func (p *Puller) processOne(name, id string) (handling, error) {
 	p.cleanupAtt(id)
 	log.Printf("pull_in: задача %s (worker=%s, вложений %d) → inbox", id, env.Worker, len(localAtts))
 	return handlingQueued, nil
+}
+
+// downloadAtts скачивает вложения конверта в files/<id>/in/.
+// deferred=true — что-то не доехало, повтор на следующем цикле (без ошибки).
+func (p *Puller) downloadAtts(id string, atts []Att) (local []Att, deferred bool, err error) {
+	local = make([]Att, 0, len(atts))
+	for _, att := range atts {
+		src := p.Root + "/" + strings.TrimPrefix(att.Path, "/")
+		dst := filepath.Join(p.QueueDir, "files", id, "in", att.Name)
+		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+			return nil, false, err
+		}
+		out, err := os.Create(dst)
+		if err != nil {
+			return nil, false, err
+		}
+		if err := p.Client.Download(src, out); err != nil {
+			out.Close()
+			log.Printf("WARN: вложение %s не скачалось (%v) — задача %s отложена", att.Path, err, id)
+			return nil, true, nil
+		}
+		if err := out.Close(); err != nil {
+			return nil, false, err
+		}
+		local = append(local, Att{
+			Path: filepath.ToSlash(filepath.Join("files", id, "in", att.Name)),
+			Name: att.Name,
+			Mime: att.Mime,
+		})
+	}
+	return local, false, nil
+}
+
+// queueTask кладёт задачу в inbox атомарно (tmp + rename). Схема — как читает
+// воркер (scripts/agent_poller.py): id, worker, task, context, attachments, chat_id.
+func (p *Puller) queueTask(id, worker, text string, context []CtxItem, localAtts []Att) error {
+	task := map[string]any{
+		"id":          id,
+		"worker":      worker,
+		"task":        text,
+		"context":     context,
+		"attachments": localAtts,
+		"chat_id":     0, // почтового чата больше нет; поле нужно схеме воркера
+	}
+	body, err := json.Marshal(task)
+	if err != nil {
+		return err
+	}
+	dst := filepath.Join(p.QueueDir, "inbox", id+".json")
+	tmp := dst + ".tmp"
+	if err := os.WriteFile(tmp, body, 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, dst)
 }
 
 // handleChat отвечает на конверт kind:chat через LLM, минуя очередь.
@@ -244,6 +271,12 @@ func (p *Puller) handleChat(name, id string, env Envelope) (handling, error) {
 // publishOutEnvelope публикует конверт ответа out/<ts>-<hash>.json (последним,
 // правило 2). При 409 — новое имя. Возвращает имя опубликованного конверта.
 func (p *Puller) publishOutEnvelope(refID string, ok bool, worker, text string, atts []Att) (string, error) {
+	return p.publishOutEnvelopeEx(refID, ok, worker, text, atts, false, true)
+}
+
+// publishOutEnvelopeEx — расширенная публикация: voice помечает конверт как
+// транскрипт голосового, notify выключает push (для промежуточных конвертов).
+func (p *Puller) publishOutEnvelopeEx(refID string, ok bool, worker, text string, atts []Att, voice, notify bool) (string, error) {
 	now := time.Now().Unix()
 	for attempt := 0; ; attempt++ {
 		envName := ydisk.MakeName(now, randomSalt())
@@ -256,6 +289,9 @@ func (p *Puller) publishOutEnvelope(refID string, ok bool, worker, text string, 
 			"text":        text,
 			"attachments": atts,
 		}
+		if voice {
+			env["voice"] = true
+		}
 		body, err := json.Marshal(env)
 		if err != nil {
 			return "", err
@@ -263,7 +299,7 @@ func (p *Puller) publishOutEnvelope(refID string, ok bool, worker, text string, 
 		err = p.Client.Upload(p.Root+"/out/"+envName+".json", body)
 		if err == nil {
 			// push — best effort: конверт уже в out/, сбой уведомления не ошибка
-			if p.Ntfy != nil {
+			if notify && p.Ntfy != nil {
 				if nerr := p.Ntfy.Reply(refID); nerr != nil {
 					log.Printf("WARN: push не ушёл (%s): %v", refID, nerr)
 				}
